@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Service Management (Alpine + sql.js + PayPal demo)</title>
+
+  <!-- Tailwind (cdn for quick hosting) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Alpine.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.13.0/cdn.min.js" defer></script>
+  <!-- sql.js (SQLite in browser) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+  <!-- PayPal SDK (sandbox client-id 'sb' for demo) -->
+  <script src="https://www.paypal.com/sdk/js?client-id=sb&currency=USD" defer></script>
+
+  <style>[x-cloak]{display:none!important}</style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="app()" x-init="init()">
+
+  <!-- NAV -->
+  <nav class="bg-blue-600 text-white p-4 shadow">
+    <div class="max-w-6xl mx-auto flex justify-between items-center">
+      <h1 class="text-lg font-bold">Service Management</h1>
+      <div class="flex items-center gap-4">
+        <template x-if="user.loggedIn">
+          <div class="text-sm">
+            <span x-text="user.role === 'admin' ? 'Admin' : user.name"></span>
+            <span class="text-blue-200 ml-2 text-xs" x-show="user.role === 'customer'">({{ user.email }})</span>
+          </div>
+        </template>
+        <template x-if="!user.loggedIn">
+          <button @click="showLogin = true" class="bg-white text-blue-600 px-3 py-1 rounded">Login</button>
+        </template>
+        <template x-if="user.loggedIn">
+          <button @click="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1 rounded">Logout</button>
+        </template>
+      </div>
+    </div>
+  </nav>
+
+  <main class="max-w-6xl mx-auto p-6">
+
+    <!-- LOGIN MODAL -->
+    <div x-show="showLogin" x-cloak class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div class="bg-white p-6 rounded shadow w-96">
+        <h2 class="text-xl font-semibold mb-4">Login</h2>
+        <form @submit.prevent="performLogin">
+          <label class="block text-sm">Email</label>
+          <input class="w-full border p-2 rounded mb-3" type="email" x-model="login.email" required />
+          <label class="block text-sm">Password</label>
+          <input class="w-full border p-2 rounded mb-4" type="password" x-model="login.password" required />
+          <div class="flex justify-between items-center">
+            <div class="text-xs text-gray-500">
+              Admin: admin@demo.com / admin123<br>
+              Demo: john@demo.com / password123
+            </div>
+            <div>
+              <button type="button" @click="showLogin=false" class="mr-2 px-3 py-1 border rounded">Cancel</button>
+              <button class="px-3 py-1 bg-blue-600 text-white rounded">Login</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- NON-LOGGED IN HOME -->
+    <div x-show="!user.loggedIn" class="text-center py-20">
+      <h2 class="text-2xl font-semibold mb-2">Service Management Demo</h2>
+      <p class="text-gray-600 mb-6">Static hosting friendly: Alpine.js + sql.js (SQLite in browser) + PayPal sandbox</p>
+      <div class="flex justify-center gap-3">
+        <button @click="showLogin=true" class="bg-blue-600 text-white px-4 py-2 rounded">Login</button>
+        <button @click="seedDemo()" class="bg-green-600 text-white px-4 py-2 rounded">Seed Demo Data</button>
+      </div>
+    </div>
+
+    <!-- MAIN APP (after login) -->
+    <div x-show="user.loggedIn" x-cloak>
+
+      <!-- ADMIN UI -->
+      <template x-if="user.role === 'admin'">
+        <section class="space-y-6">
+          <div class="flex justify-between items-center">
+            <h2 class="text-xl font-semibold">Admin Dashboard</h2>
+            <div class="flex gap-2">
+              <button @click="activeTab='customers'" :class="activeTab==='customers' ? 'bg-white text-blue-600' : 'bg-blue-600 text-white' " class="px-3 py-1 rounded">Customers</button>
+              <button @click="activeTab='templates'" :class="activeTab==='templates' ? 'bg-white text-blue-600' : 'bg-blue-600 text-white' " class="px-3 py-1 rounded">Service Templates</button>
+              <button @click="activeTab='payments'" :class="activeTab==='payments' ? 'bg-white text-blue-600' : 'bg-blue-600 text-white' " class="px-3 py-1 rounded">Payments</button>
+              <button @click="activeTab='reminders'" :class="activeTab==='reminders' ? 'bg-white text-blue-600' : 'bg-blue-600 text-white' " class="px-3 py-1 rounded">Reminders</button>
+            </div>
+          </div>
+
+          <!-- CUSTOMERS TAB -->
+          <div x-show="activeTab==='customers'">
+            <div class="bg-white p-5 rounded shadow">
+              <div class="flex justify-between mb-4">
+                <h3 class="font-semibold">Customers</h3>
+                <div>
+                  <button @click="openAddCustomer()" class="bg-green-600 text-white px-3 py-1 rounded">Add Customer</button>
+                </div>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                  <thead class="text-xs text-gray-500 border-b">
+                    <tr><th class="py-2">Name</th><th>Email</th><th>Services</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="c in customers" :key="c.id">
+                      <tr class="border-b">
+                        <td class="py-2" x-text="c.name"></td>
+                        <td x-text="c.email"></td>
+                        <td x-text="countServices(c.id)"></td>
+                        <td class="py-2">
+                          <button @click="openAddService(c)" class="text-green-600 mr-3">Add Service</button>
+                          <button @click="viewCustomer(c)" class="text-blue-600 mr-3">View</button>
+                          <button @click="sendReminder(c)" class="text-yellow-600">Send Reminder</button>
+                        </td>
+                      </tr>
+                    </template>
+                    <tr x-show="customers.length===0"><td colspan="4" class="py-4 text-gray-500">No customers yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- TEMPLATES TAB -->
+          <div x-show="activeTab==='templates'">
+            <div class="bg-white p-5 rounded shadow">
+              <div class="flex justify-between mb-4">
+                <h3 class="font-semibold">Service Templates</h3>
+                <div>
+                  <button @click="openAddTemplate()" class="bg-green-600 text-white px-3 py-1 rounded">Add Template</button>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <template x-for="t in templates" :key="t.id">
+                  <div class="border p-4 rounded">
+                    <div class="flex justify-between">
+                      <h4 class="font-semibold" x-text="t.name"></h4>
+                      <div class="text-sm text-gray-500">Monthly $<span x-text="t.monthly_price"></span></div>
+                    </div>
+                    <p class="text-sm text-gray-600" x-text="t.description"></p>
+                    <div class="mt-3 flex gap-2">
+                      <button @click="editTemplate(t)" class="text-blue-600">Edit</button>
+                      <button @click="deleteTemplate(t)" class="text-red-600">Delete</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- PAYMENTS TAB -->
+          <div x-show="activeTab==='payments'">
+            <div class="bg-white p-5 rounded shadow">
+              <h3 class="font-semibold mb-4">Payments</h3>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                  <thead class="text-xs text-gray-500 border-b">
+                    <tr><th>Customer</th><th>Service</th><th>Amount</th><th>Type</th><th>Status</th><th>Date</th><th>Action</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in payments" :key="p.id">
+                      <tr class="border-b">
+                        <td x-text="getCustomerName(p.customer_id)"></td>
+                        <td x-text="getServiceName(p.service_id)"></td>
+                        <td>$<span x-text="p.amount"></span></td>
+                        <td x-text="p.payment_type"></td>
+                        <td x-text="p.status"></td>
+                        <td x-text="p.payment_date"></td>
+                        <td>
+                          <button x-show="p.status==='processing'" @click="completeRenewal(p)" class="text-green-600">Complete Renewal</button>
+                        </td>
+                      </tr>
+                    </template>
+                    <tr x-show="payments.length===0"><td colspan="7" class="py-4 text-gray-500">No payments yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- REMINDERS TAB -->
+          <div x-show="activeTab==='reminders'">
+            <div class="bg-white p-5 rounded shadow">
+              <h3 class="font-semibold mb-4">Upcoming Renewals (next 30 days)</h3>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                  <thead class="text-xs text-gray-500 border-b">
+                    <tr><th>Customer</th><th>Service</th><th>Renewal</th><th>Days Left</th><th>Action</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="row in upcoming" :key="row.service.id">
+                      <tr class="border-b">
+                        <td x-text="getCustomerName(row.service.customer_id)"></td>
+                        <td x-text="row.service.service_name"></td>
+                        <td x-text="row.service.renewal_date"></td>
+                        <td x-text="row.days"></td>
+                        <td><button @click="sendReminderById(row.service.customer_id,row.service)" class="text-yellow-600">Send Reminder</button></td>
+                      </tr>
+                    </template>
+                    <tr x-show="upcoming.length===0"><td colspan="5" class="py-4 text-gray-500">No upcoming renewals.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </section>
+      </template>
+
+      <!-- CUSTOMER UI -->
+      <template x-if="user.role === 'customer'">
+        <section>
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-semibold">My Services</h2>
+            <div class="text-sm text-gray-600">Welcome, <span x-text="user.name"></span></div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <template x-for="s in myServices" :key="s.id">
+              <div class="bg-white p-4 rounded shadow">
+                <div class="flex justify-between items-start">
+                  <div>
+                    <h4 class="font-semibold" x-text="s.service_name"></h4>
+                    <div class="text-xs text-gray-500">Renewal: <span x-text="s.renewal_date"></span></div>
+                    <div class="text-xs text-gray-500">Days left: <span x-text="daysUntil(s.renewal_date)"></span></div>
+                  </div>
+                  <div>
+                    <span :class="s.payment_status==='processing' ? 'bg-yellow-100 text-yellow-800' : daysUntil(s.renewal_date) < 0 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'"
+                          class="px-2 py-1 text-xs font-semibold rounded-full" x-text="s.payment_status === 'processing' ? 'processing' : (daysUntil(s.renewal_date) < 0 ? 'expired' : (daysUntil(s.renewal_date) <=30 ? 'expiring' : 'active'))"></span>
+                  </div>
+                </div>
+
+                <div class="mt-4 space-y-2">
+                  <div class="flex justify-between">
+                    <div>Monthly</div><div>$<span x-text="s.monthly_price"></span></div>
+                  </div>
+                  <div class="flex justify-between">
+                    <div>Yearly</div><div>$<span x-text="s.yearly_price"></span></div>
+                  </div>
+
+                  <div class="space-y-2">
+                    <div>
+                      <button @click="startPay(s,'monthly')" class="w-full bg-blue-600 text-white py-2 rounded">Renew Monthly ($<span x-text="s.monthly_price"></span>)</button>
+                    </div>
+                    <div>
+                      <button @click="startPay(s,'yearly')" class="w-full bg-green-600 text-white py-2 rounded">Renew Yearly ($<span x-text="s.yearly_price"></span>)</button>
+                    </div>
+                  </div>
+
+                  <div class="mt-3" x-show="payingFor && payingFor.id === s.id">
+                    <div id="paypal-button-container" class="mt-2"></div>
+                    <div class="text-xs text-gray-500 mt-2">Using PayPal Sandbox (demo). After approval, admin will complete renewal.</div>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div x-show="myServices.length===0" class="col-span-3 bg-white p-4 rounded shadow text-center text-gray-500">No services assigned.</div>
+          </div>
+        </section>
+      </template>
+
+    </div>
+  </main>
+
+  <!-- MODALS: Add Customer, Add Template, Add Service -->
+  <div x-show="modal==='addCustomer'" x-cloak class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white p-5 rounded w-96">
+      <h3 class="font-semibold mb-3">Add Customer</h3>
+      <form @submit.prevent="doAddCustomer">
+        <label class="text-sm">Name</label>
+        <input class="w-full border p-2 rounded mb-2" x-model="formCustomer.name" required />
+        <label class="text-sm">Email</label>
+        <input class="w-full border p-2 rounded mb-2" type="email" x-model="formCustomer.email" required />
+        <label class="text-sm">Password</label>
+        <input class="w-full border p-2 rounded mb-4" type="password" x-model="formCustomer.password" required />
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="modal=''" class="px-3 py-1 border rounded">Cancel</button>
+          <button class="px-3 py-1 bg-blue-600 text-white rounded">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div x-show="modal==='addTemplate'" x-cloak class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white p-5 rounded w-96">
+      <h3 class="font-semibold mb-3">Add Template</h3>
+      <form @submit.prevent="doAddTemplate">
+        <label class="text-sm">Service Name</label>
+        <input class="w-full border p-2 rounded mb-2" x-model="formTemplate.name" required />
+        <label class="text-sm">Description</label>
+        <textarea class="w-full border p-2 rounded mb-2" x-model="formTemplate.description"></textarea>
+        <label class="text-sm">Monthly Price</label>
+        <input class="w-full border p-2 rounded mb-2" type="number" step="0.01" x-model="formTemplate.monthly_price" required />
+        <label class="text-sm">Yearly Price</label>
+        <input class="w-full border p-2 rounded mb-4" type="number" step="0.01" x-model="formTemplate.yearly_price" required />
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="modal=''" class="px-3 py-1 border rounded">Cancel</button>
+          <button class="px-3 py-1 bg-blue-600 text-white rounded">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div x-show="modal==='addService'" x-cloak class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white p-5 rounded w-96">
+      <h3 class="font-semibold mb-3">Add Service to <span x-text="formService.customer_name"></span></h3>
+      <form @submit.prevent="doAddService">
+        <label class="text-sm">Template</label>
+        <select class="w-full border p-2 rounded mb-2" x-model="formService.template_id" required>
+          <option value="">-- select --</option>
+          <template x-for="t in templates" :key="t.id">
+            <option :value="t.id" x-text="t.name + ' - $' + t.monthly_price + '/mo'"></option>
+          </template>
+        </select>
+        <label class="text-sm">Renewal Date</label>
+        <input class="w-full border p-2 rounded mb-4" type="date" x-model="formService.renewal_date" required />
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="modal=''" class="px-3 py-1 border rounded">Cancel</button>
+          <button class="px-3 py-1 bg-blue-600 text-white rounded">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- SCRIPT: APP LOGIC -->
+  <script>
+    function app(){
+      return {
+        // UI
+        showLogin: false,
+        modal: '',
+        activeTab: 'customers',
+        login: { email: '', password: '' },
+
+        // user
+        user: { loggedIn: false, id: null, name: '', email: '', role: '' },
+
+        // db
+        SQL: null,
+        db: null,
+
+        // datasets mirrored to Alpine
+        customers: [],
+        templates: [],
+        myServices: [],
+        payments: [],
+
+        // upcoming
+        upcoming: [],
+
+        // forms
+        formCustomer: { name:'', email:'', password:'' },
+        formTemplate: { name:'', description:'', monthly_price:'', yearly_price:'' },
+        formService: { customer_id:null, customer_name:'', template_id:'', renewal_date:'' },
+
+        // payment flow
+        payingFor: null,
+        payingType: '',
+
+        async init(){
+          // init sql.js
+          this.SQL = await initSqlJs({
+            locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+          });
+
+          // load or create DB
+          const persisted = localStorage.getItem('svc_db');
+          if(persisted){
+            const arr = new Uint8Array(JSON.parse(persisted));
+            this.db = new this.SQL.Database(arr);
+          } else {
+            this.db = new this.SQL.Database();
+            this.createSchema();
+            this.insertInitialData();
+            this.save();
+          }
+
+          this.reloadAll();
+        },
+
+        // ---------- SQL helpers ----------
+        run(sql, params=[]){
+          // non-select
+          const stmt = this.db.prepare(sql);
+          try{
+            stmt.bind(params);
+            stmt.step();
+          } finally {
+            stmt.free();
+          }
+        },
+
+        all(sql, params=[]){
+          // return rows as arrays
+          const stmt = this.db.prepare(sql);
+          const rows = [];
+          try{
+            stmt.bind(params);
+            while(stmt.step()){
+              rows.push(stmt.get());
+            }
+          } finally {
+            stmt.free();
+          }
+          return rows;
+        },
+
+        createSchema(){
+          const queries = [
+            `CREATE TABLE customers (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              email TEXT UNIQUE NOT NULL,
+              password TEXT NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`,
+            `CREATE TABLE service_templates (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              description TEXT,
+              monthly_price REAL NOT NULL,
+              yearly_price REAL NOT NULL
+            )`,
+            `CREATE TABLE customer_services (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              customer_id INTEGER,
+              service_name TEXT NOT NULL,
+              monthly_price REAL NOT NULL,
+              yearly_price REAL NOT NULL,
+              renewal_date DATE NOT NULL,
+              payment_status TEXT DEFAULT 'active',
+              FOREIGN KEY (customer_id) REFERENCES customers(id)
+            )`,
+            `CREATE TABLE payments (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              customer_id INTEGER,
+              service_id INTEGER,
+              amount REAL NOT NULL,
+              payment_type TEXT NOT NULL,
+              status TEXT DEFAULT 'processing',
+              payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY(customer_id) REFERENCES customers(id),
+              FOREIGN KEY(service_id) REFERENCES customer_services(id)
+            )`
+          ];
+          queries.forEach(q=> this.db.run(q));
+        },
+
+        insertInitialData(){
+          // demo customer
+          this.db.run(`INSERT INTO customers (name,email,password) VALUES ('John Doe','john@demo.com','password123')`);
+          // demo templates
+          this.db.run(`INSERT INTO service_templates (name,description,monthly_price,yearly_price) VALUES 
+            ('Web Hosting','Premium web hosting',9.99,99.99),
+            ('Domain Registration','Domain registration',12.99,129.99),
+            ('Business Email','Email hosting',5.99,59.99)`);
+          // demo service for John, renewal next month
+          const future = new Date(); future.setMonth(future.getMonth()+1);
+          const iso = future.toISOString().split('T')[0];
+          this.db.run(`INSERT INTO customer_services (customer_id,service_name,monthly_price,yearly_price,renewal_date) VALUES (1,'Web Hosting',9.99,99.99,?)`, [iso]);
+        },
+
+        save(){
+          const exported = this.db.export();
+          const arr = Array.from(exported);
+          localStorage.setItem('svc_db', JSON.stringify(arr));
+        },
+
+        // reload data for UI
+        reloadAll(){
+          // customers
+          const custRows = this.all("SELECT id,name,email,password,created_at FROM customers");
+          this.customers = custRows.map(r=>({ id:r[0], name:r[1], email:r[2], password:r[3], created_at:r[4]}));
+          // templates
+          const tpl = this.all("SELECT id,name,description,monthly_price,yearly_price FROM service_templates");
+          this.templates = tpl.map(r=>({id:r[0],name:r[1],description:r[2],monthly_price:r[3],yearly_price:r[4]}));
+          // payments latest first
+          const pay = this.all("SELECT id,customer_id,service_id,amount,payment_type,status,payment_date FROM payments ORDER BY payment_date DESC");
+          this.payments = pay.map(r=>({id:r[0],customer_id:r[1],service_id:r[2],amount:r[3],payment_type:r[4],status:r[5],payment_date:r[6]}));
+          // if logged in customer, load their services
+          if(this.user.loggedIn && this.user.role==='customer'){
+            this.loadCustomerServices(this.user.id);
+          } else {
+            this.myServices = [];
+          }
+          this.computeUpcoming();
+        },
+
+        // ---------- Auth ----------
+        performLogin(){
+          // admin credentials
+          if(this.login.email === 'admin@demo.com' && this.login.password === 'admin123'){
+            this.user = { loggedIn:true, id:0, name:'Admin', email:'admin@demo.com', role:'admin' };
+            this.showLogin = false;
+            this.login = { email:'', password:'' };
+            this.reloadAll();
+            return;
+          }
+          // customer login (simple)
+          const rows = this.all("SELECT id,name,email,password FROM customers WHERE email = ?", [this.login.email]);
+          if(rows.length && rows[0][3] === this.login.password){
+            this.user = { loggedIn:true, id:rows[0][0], name:rows[0][1], email:rows[0][2], role:'customer' };
+            this.showLogin = false;
+            this.login = { email:'', password:'' };
+            this.loadCustomerServices(this.user.id);
+            return;
+          }
+          alert('Invalid credentials');
+        },
+
+        logout(){
+          this.user = { loggedIn:false, id:null, name:'', email:'', role:''};
+          this.activeTab='customers';
+          this.myServices=[];
+        },
+
+        // ---------- Admin actions ----------
+        openAddCustomer(){
+          this.formCustomer = { name:'', email:'', password:'' };
+          this.modal = 'addCustomer';
+        },
+        doAddCustomer(){
+          try{
+            this.run("INSERT INTO customers (name,email,password) VALUES (?,?,?)",[this.formCustomer.name,this.formCustomer.email,this.formCustomer.password]);
+            this.save(); this.reloadAll(); this.modal='';
+            alert('Customer added');
+          }catch(e){
+            alert('Error: '+e.message);
+          }
+        },
+
+        openAddTemplate(){
+          this.formTemplate = { name:'', description:'', monthly_price:'', yearly_price:'' };
+          this.modal = 'addTemplate';
+        },
+        doAddTemplate(){
+          try{
+            this.run("INSERT INTO service_templates (name,description,monthly_price,yearly_price) VALUES (?,?,?,?)",[this.formTemplate.name,this.formTemplate.description,parseFloat(this.formTemplate.monthly_price),parseFloat(this.formTemplate.yearly_price)]);
+            this.save(); this.reloadAll(); this.modal='';
+            alert('Template added');
+          }catch(e){ alert('Error: '+e.message); }
+        },
+        editTemplate(t){
+          const np = prompt('New monthly price for '+t.name, t.monthly_price);
+          if(np!==null && !isNaN(np)){
+            this.run("UPDATE service_templates SET monthly_price=? WHERE id=?",[parseFloat(np), t.id]);
+            this.save(); this.reloadAll();
+            alert('Updated');
+          }
+        },
+        deleteTemplate(t){
+          if(!confirm('Delete template '+t.name+'?')) return;
+          this.run("DELETE FROM service_templates WHERE id=?",[t.id]);
+          this.save(); this.reloadAll();
+        },
+
+        openAddService(customer){
+          this.formService = { customer_id:customer.id, customer_name:customer.name, template_id:'', renewal_date:'' };
+          this.modal = 'addService';
+        },
+        doAddService(){
+          if(!this.formService.template_id) return alert('Select a template');
+          // get template values
+          const tpl = this.all("SELECT id,name,monthly_price,yearly_price FROM service_templates WHERE id=?",[this.formService.template_id])[0];
+          if(!tpl) return alert('Template not found');
+          this.run("INSERT INTO customer_services (customer_id,service_name,monthly_price,yearly_price,renewal_date) VALUES (?,?,?,?,?)",[this.formService.customer_id,tpl[1],tpl[2],tpl[3],this.formService.renewal_date]);
+          this.save(); this.reloadAll(); this.modal='';
+          alert('Service added to '+this.formService.customer_name);
+        },
+
+        viewCustomer(c){
+          // simple popup with services
+          const rows = this.all("SELECT id,service_name,renewal_date,payment_status FROM customer_services WHERE customer_id=?",[c.id]);
+          const lines = rows.map(r=>`${r[1]} — ${r[2]} — ${r[3]}`).join('\n') || 'No services';
+          alert(`Customer: ${c.name}\nEmail: ${c.email}\n\nServices:\n${lines}`);
+        },
+
+        sendReminder(c){
+          // gather near-expiring services for this customer
+          const rows = this.all("SELECT id,service_name,renewal_date FROM customer_services WHERE customer_id=?",[c.id]);
+          const near = rows.filter(r => {
+            const days = this.calcDays(r[2]); return days <= 30;
+          });
+          const body = near.length ? `Dear ${c.name},\n\nThe following services are near renewal:\n${near.map(n=> n[1]+' — '+n[2]).join('\n')}\n\nPlease renew soon.` : `Dear ${c.name},\n\nYou have upcoming services.`;
+          const mail = `mailto:${c.email}?subject=${encodeURIComponent('Service Renewal Reminder')}&body=${encodeURIComponent(body)}`;
+          window.location.href = mail;
+        },
+
+        sendReminderById(customer_id,service){
+          const c = this.customers.find(x=>x.id===customer_id);
+          if(!c) return alert('Customer not found');
+          const body = `Dear ${c.name},\n\nThis is a reminder that your service "${service.service_name}" renews on ${service.renewal_date}.\n\nRegards.`;
+          window.location.href = `mailto:${c.email}?subject=${encodeURIComponent('Service Renewal Reminder')}&body=${encodeURIComponent(body)}`;
+        },
+
+        // ---------- Payments & Customer ----------
+        startPay(service, type){
+          // show PayPal button for that service
+          this.payingFor = service;
+          this.payingType = type;
+          // render PayPal buttons into container (we recreate each time)
+          setTimeout(()=> this.renderPayPal(service,type), 50);
+        },
+
+        renderPayPal(service,type){
+          // clear container
+          const container = document.getElementById('paypal-button-container');
+          container.innerHTML = '';
+          // amount
+          const amount = (type === 'monthly') ? service.monthly_price : service.yearly_price;
+          // create buttons using PayPal SDK (client-id=sb sandbox)
+          if(typeof paypal === 'undefined'){
+            container.innerText = 'PayPal not loaded';
+            return;
+          }
+          paypal.Buttons({
+            createOrder: (data, actions) => {
+              return actions.order.create({
+                purchase_units: [{ amount: { value: String(amount) }, description: `${service.service_name} (${type})` }]
+              });
+            },
+            onApprove: async (data, actions) => {
+              const details = await actions.order.capture();
+              // record payment as processing and mark service processing
+              try{
+                // create payment
+                this.run("INSERT INTO payments (customer_id,service_id,amount,payment_type,status) VALUES (?,?,?,?,?)",[this.user.id, service.id, amount, type, 'processing']);
+                // update service payment_status
+                this.run("UPDATE customer_services SET payment_status='processing' WHERE id=?",[service.id]);
+                this.save(); this.reloadAll();
+                alert('Payment approved (demo). Admin will complete renewal.');
+                // hide paypal area
+                this.payingFor = null;
+                // cleanup buttons
+                container.innerHTML = '';
+              }catch(e){ alert('Error saving payment: '+e.message); }
+            },
+            onCancel: function(){ alert('Payment canceled'); },
+            onError: function(err){ console.error(err); alert('PayPal error'); }
+          }).render('#paypal-button-container');
+        },
+
+        loadCustomerServices(customerId){
+          const rows = this.all("SELECT id,customer_id,service_name,monthly_price,yearly_price,renewal_date,payment_status FROM customer_services WHERE customer_id=?",[customerId]);
+          this.myServices = rows.map(r=>({ id:r[0], customer_id:r[1], service_name:r[2], monthly_price:r[3], yearly_price:r[4], renewal_date:r[5], payment_status:r[6] }));
+        },
+
+        // admin complete renewal
+        completeRenewal(payment){
+          if(!confirm('Complete this renewal and extend date?')) return;
+          // get service
+          const svc = this.all("SELECT id,renewal_date FROM customer_services WHERE id=?",[payment.service_id])[0];
+          if(!svc) return alert('Service not found');
+          let current = new Date(svc[1]);
+          // extend by payment type
+          if(payment.payment_type === 'monthly') current.setMonth(current.getMonth()+1);
+          else current.setFullYear(current.getFullYear()+1);
+          const iso = current.toISOString().split('T')[0];
+          try{
+            this.run("UPDATE customer_services SET renewal_date=?, payment_status='active' WHERE id=?",[iso,payment.service_id]);
+            this.run("UPDATE payments SET status='completed' WHERE id=?",[payment.id]);
+            this.save(); this.reloadAll();
+            alert('Renewal completed.');
+          }catch(e){ alert('Error: '+e.message); }
+        },
+
+        // helpers
+        countServices(customerId){
+          const rows = this.all("SELECT COUNT(*) FROM customer_services WHERE customer_id=?",[customerId]);
+          return rows.length ? rows[0][0] : 0;
+        },
+        getCustomerName(id){ const r = this.all("SELECT name FROM customers WHERE id=?",[id]); return r.length? r[0][0] : 'Unknown'; },
+        getServiceName(id){ const r = this.all("SELECT service_name FROM customer_services WHERE id=?",[id]); return r.length? r[0][0] : 'Unknown'; },
+
+        daysUntil(dateStr){ return this.calcDays(dateStr); },
+        calcDays(dateStr){
+          const today = new Date(); const d = new Date(dateStr);
+          const diff = Math.ceil((d - today) / (1000*60*60*24));
+          return diff;
+        },
+
+        computeUpcoming(){
+          const rows = this.all("SELECT id,customer_id,service_name,renewal_date FROM customer_services");
+          const next = [];
+          rows.forEach(r=>{
+            const days = this.calcDays(r[3]);
+            if(days <= 30){
+              next.push({ service:{ id:r[0], customer_id:r[1], service_name:r[2], renewal_date:r[3] }, days});
+            }
+          });
+          this.upcoming = next.sort((a,b)=>a.days - b.days);
+        },
+
+        seedDemo(){
+          if(!confirm('Seed demo data? This will overwrite existing DB.')) return;
+          localStorage.removeItem('svc_db');
+          location.reload();
+        }
+
+      };
+    }
+  </script>
+</body>
+</html>
